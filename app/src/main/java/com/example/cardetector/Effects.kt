@@ -1,7 +1,6 @@
 package com.example.cardetector
 
-// Native Compose ports of the web "thinking orb" (dotted sphere + light programs)
-// and the Apple/Google-style rainbow glow.
+// Camera-style "scanning" effects shown while a photo is analysed, plus the staggered reveal.
 
 import android.os.SystemClock
 import androidx.compose.animation.*
@@ -15,9 +14,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.BlurredEdgeTreatment
 import androidx.compose.ui.draw.blur
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.RoundRect
@@ -27,157 +26,139 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import kotlin.math.*
 
-val RAINBOW = listOf(
-    Color(0xFF4F8BFF), Color(0xFF8E6BFF), Color(0xFFE76BD6),
-    Color(0xFFFF7A59), Color(0xFFFFC94D), Color(0xFF3DDC97), Color(0xFF4F8BFF),
-)
 val DONE_GREEN = Color(0xFF34D399)
+val SCAN = Color(0xFF64D2FF)
 
-/* ───────── dotted orb ───────── */
+val STEP_TITLES = listOf("Preparing photo", "Uploading to Gemini", "Recognising make & model", "Reading the answer")
+private val STEP_SHORT = listOf("Prepare", "Upload", "Recognise", "Read")
 
-// Dots on 16 latitude rings of a unit sphere; u = 0 at the top, 1 at the bottom.
-private class Dot(val x: Float, val y: Float, val z: Float, val u: Float, val seed: Float)
+/* ───────── scanner overlay ───────── */
 
-private val DOTS: Array<Dot> = run {
-    val rnd = java.util.Random(7)
-    val rings = 16
-    buildList {
-        for (k in 0 until rings) {
-            val y = 1 - (k + 0.5f) / rings * 2
-            val r = sqrt(1 - y * y)
-            val m = max(4, (30 * r).roundToInt())
-            for (j in 0 until m) {
-                val a = j.toFloat() / m * 2 * PI.toFloat() + k * 0.35f
-                add(Dot(cos(a) * r, y, sin(a) * r, (1 - y) / 2, rnd.nextFloat() * 6.283f))
-            }
-        }
-    }.toTypedArray()
+// Fixed "feature points" (fractions of the frame) that light up as the scan line passes.
+private class Spark(val x: Float, val y: Float, val r: Float)
+
+private val SPARKS = run {
+    val rnd = java.util.Random(11)
+    Array(46) { Spark(0.08f + rnd.nextFloat() * 0.84f, 0.06f + rnd.nextFloat() * 0.88f, 1.2f + rnd.nextFloat() * 1.6f) }
 }
 
-/**
- * A spinning sphere of dots. [program] picks how the dots light up:
- * 0 sweeping comet, 1 two roaming spotlights, 2 scanning band, 3 fast comet.
- */
+/** Dimmed photo with a grid, a sweeping laser line, lit feature points, lock-on brackets and the current step. */
 @Composable
-fun ThinkingOrb(program: Int, color: Color, modifier: Modifier = Modifier) {
+fun ScanOverlay(stage: Int, modifier: Modifier = Modifier) {
     var time by remember { mutableFloatStateOf(0f) }
     LaunchedEffect(Unit) {
         val start = withFrameNanos { it }
         while (true) withFrameNanos { time = (it - start) / 1e9f }
     }
-    // Assemble: dots grow in from the top of the sphere down.
-    val k = remember { Animatable(0f) }
-    LaunchedEffect(Unit) { k.animateTo(1f, tween(800, easing = EaseOutQuint)) }
-    // Cross-fade between light programs.
-    val w = List(4) { q -> animateFloatAsState(if (program % 4 == q) 1f else 0f, tween(350), label = "w$q") }
+    // Brackets fly in from the frame edges and lock on (slight overshoot, like a camera focusing).
+    val lock = remember { Animatable(0f) }
+    LaunchedEffect(Unit) { lock.animateTo(1f, spring(dampingRatio = 0.7f, stiffness = 140f)) }
 
-    Canvas(modifier) {
-        val t = time
-        val radius = size.minDimension * 0.42f
-        val scale = radius / 66f
-        val yaw = t * 0.9f
-        val cyw = cos(yaw); val syw = sin(yaw)
-        val cp = cos(0.35f); val sp = sin(0.35f)
-        val n = DOTS.size
-        val head0 = (t * 300f) % n
-        val head3 = (t * 480f) % n
-        val a1 = t * 0.8f; val b1 = sin(t * 0.5f) * 0.9f
-        val f1x = cos(b1) * cos(a1); val f1y = sin(b1); val f1z = cos(b1) * sin(a1)
-        val a2 = t * 0.55f + 2.1f; val b2 = cos(t * 0.42f) * 0.9f
-        val f2x = cos(b2) * cos(a2); val f2y = sin(b2); val f2z = cos(b2) * sin(a2)
-        val lat = sin(t * 2.2f)
-        val kv = k.value
+    Box(modifier.background(Color.Black.copy(alpha = 0.45f))) {
+        Canvas(Modifier.fillMaxSize()) {
+            val t = time; val w = size.width; val h = size.height; val e = lock.value
 
-        fun comet(i: Int, head: Float, width: Float): Float {
-            var d = abs(i - head); if (d > n - d) d = n - d
-            val v = max(0f, 1 - d / width); return v * v
-        }
+            val step = 36.dp.toPx(); val grid = Color.White.copy(alpha = 0.06f * e.coerceIn(0f, 1f))
+            var gx = step; while (gx < w) { drawLine(grid, Offset(gx, 0f), Offset(gx, h), 1f); gx += step }
+            var gy = step; while (gy < h) { drawLine(grid, Offset(0f, gy), Offset(w, gy), 1f); gy += step }
 
-        for (pass in 0..1) for (i in 0 until n) {
-            val d = DOTS[i]
-            val x1 = d.x * cyw + d.z * syw
-            val z1 = -d.x * syw + d.z * cyw
-            val y2 = d.y * cp - z1 * sp
-            val z2 = d.y * sp + z1 * cp
-            val depth = (z2 + 1) / 2
-            if ((depth >= 0.5f) != (pass == 1)) continue // back half first, then front
-            val ki = (kv * 1.6f - 0.6f * d.u).coerceIn(0f, 1f)
-            if (ki <= 0.001f) continue
-
-            var lit = 0f
-            if (w[0].value > 0.001f) lit = max(lit, comet(i, head0, 16f) * w[0].value)
-            if (w[1].value > 0.001f) {
-                val v = max(
-                    max(0f, (d.x * f1x + d.y * f1y + d.z * f1z - 0.72f) / 0.28f),
-                    max(0f, (d.x * f2x + d.y * f2y + d.z * f2z - 0.72f) / 0.28f),
-                )
-                lit = max(lit, v * v * w[1].value)
-            }
-            if (w[2].value > 0.001f) {
-                val e = d.y - lat
-                val v = max(0f, 1 - e * e / 0.02f)
-                lit = max(lit, v * v * w[2].value)
-            }
-            if (w[3].value > 0.001f) lit = max(lit, comet(i, head3, 22f) * w[3].value)
-
-            val f = 2.8f / (2.8f - z2)
-            val alpha = (0.1f + 0.035f * sin(d.seed + t * 1.6f) + 0.32f * depth * depth + 0.75f * lit).coerceIn(0f, 1f) * ki
-            val r = (1.15f * (0.45f + 0.75f * depth) * f + 0.9f * lit) * (0.4f + 0.6f * ki) * scale
-            drawCircle(
-                color.copy(alpha = alpha), r,
-                Offset(center.x + x1 * radius * ki * f, center.y - y2 * radius * ki * f),
+            // Scan line ping-pongs top↔bottom, easing at the ends.
+            val p = (1 - cos(t * 2 * PI.toFloat() / 2.4f)) / 2
+            val y = h * (0.04f + 0.92f * p)
+            val band = 70.dp.toPx()
+            drawRect(
+                Brush.verticalGradient(listOf(Color.Transparent, SCAN.copy(alpha = 0.28f), Color.Transparent), y - band, y + band),
+                Offset(0f, y - band), Size(w, band * 2)
             )
+            drawLine(
+                Brush.horizontalGradient(listOf(Color.Transparent, SCAN, Color.White, SCAN, Color.Transparent)),
+                Offset(0f, y), Offset(w, y), 2.dp.toPx()
+            )
+
+            val reach = 46.dp.toPx()
+            for (s in SPARKS) {
+                val a = (1 - abs(s.y * h - y) / reach).coerceIn(0f, 1f)
+                if (a > 0f) drawCircle(SCAN.copy(alpha = a), s.r.dp.toPx() * (0.6f + 0.6f * a), Offset(s.x * w, s.y * h))
+            }
+
+            val half = min(w, h) * (0.5f - 0.2f * e + 0.012f * sin(t * 4f))
+            val len = 26.dp.toPx()
+            val st = Stroke(3.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+            val c = Color.White.copy(alpha = 0.9f * e.coerceIn(0f, 1f))
+            for (sx in listOf(-1f, 1f)) for (sy in listOf(-1f, 1f)) {
+                val x = center.x + sx * half; val yy = center.y + sy * half
+                drawPath(Path().apply { moveTo(x, yy - sy * len); lineTo(x, yy); lineTo(x - sx * len, yy) }, c, style = st)
+            }
+        }
+
+        AnimatedContent(
+            STEP_TITLES[stage.coerceIn(0, STEP_TITLES.lastIndex)],
+            Modifier.align(Alignment.BottomCenter).padding(bottom = 20.dp),
+            transitionSpec = {
+                (fadeIn(tween(220)) + slideInVertically(spring(dampingRatio = 1f, stiffness = 500f)) { it }) togetherWith
+                    (fadeOut(tween(150)) + slideOutVertically(tween(150)) { -it })
+            },
+            label = "stage"
+        ) { title ->
+            Row(
+                Modifier.clip(CircleShape).background(Color.Black.copy(alpha = 0.55f)).padding(horizontal = 14.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                PulseDot()
+                Spacer(Modifier.width(8.dp))
+                Text(title, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+            }
         }
     }
 }
 
-/** Three dots that blink in turn, like "Thinking…". */
 @Composable
-fun BlinkingDots(color: Color, modifier: Modifier = Modifier) {
-    val t by rememberInfiniteTransition(label = "dots").animateFloat(
-        0f, 1f, infiniteRepeatable(tween(1200, easing = LinearEasing)), label = "t"
+private fun PulseDot() {
+    val a by rememberInfiniteTransition(label = "pulse").animateFloat(
+        0.35f, 1f, infiniteRepeatable(tween(600, easing = EaseInOutSine), RepeatMode.Reverse), label = "a"
     )
-    Canvas(modifier) {
-        val r = size.height / 2
-        for (k in 0..2) {
-            val phase = ((t - k * 0.16f) % 1f + 1f) % 1f
-            val a = if (phase < 0.4f) 0.25f + 0.75f * (phase / 0.4f) else if (phase < 0.8f) 1f - 0.75f * ((phase - 0.4f) / 0.4f) else 0.25f
-            drawCircle(color.copy(alpha = a), r, Offset(r + k * r * 3.2f, r))
-        }
-    }
+    Box(Modifier.size(7.dp).graphicsLayer { alpha = a; scaleX = 0.8f + 0.2f * a; scaleY = 0.8f + 0.2f * a }.clip(CircleShape).background(SCAN))
 }
 
-/* ───────── rainbow glow ───────── */
+/* ───────── scanning edge glow ───────── */
 
-private fun DrawScope.rainbowRing(angle: Float, corner: Dp) {
+// Two bright comets on a faint cyan ring.
+private val COMETS = listOf(
+    Color.Transparent, SCAN.copy(alpha = 0.5f), Color.White, SCAN, Color.Transparent,
+    Color.Transparent, SCAN.copy(alpha = 0.5f), Color.White, SCAN, Color.Transparent,
+)
+
+private fun DrawScope.scanRing(angle: Float, corner: Dp) {
     clipPath(Path().apply { addRoundRect(RoundRect(0f, 0f, size.width, size.height, CornerRadius(corner.toPx()))) }) {
-        rotate(angle) { drawCircle(Brush.sweepGradient(RAINBOW), radius = size.maxDimension) }
+        drawRect(SCAN.copy(alpha = 0.25f))
+        rotate(angle) { drawCircle(Brush.sweepGradient(COMETS), radius = size.maxDimension) }
     }
 }
 
-/** Rotating rainbow edge + soft blurred glow. Put it behind a card that is inset by a few dp. */
+/** Faint cyan edge with two light streaks racing round it. Put it behind a card that is inset by a few dp. */
 @Composable
-fun RainbowGlow(corner: Dp, modifier: Modifier = Modifier) {
+fun ScanGlow(corner: Dp, modifier: Modifier = Modifier) {
     val angle by rememberInfiniteTransition(label = "glow").animateFloat(
-        0f, 360f, infiniteRepeatable(tween(3500, easing = LinearEasing)), label = "angle"
+        0f, 360f, infiniteRepeatable(tween(2400, easing = LinearEasing)), label = "angle"
     )
     Box(modifier) {
         // ponytail: blur needs Android 12+; older phones just get the crisp ring
-        Canvas(Modifier.matchParentSize().graphicsLayer { alpha = 0.7f }.blur(24.dp, BlurredEdgeTreatment.Unbounded)) {
-            rainbowRing(angle, corner)
+        Canvas(Modifier.matchParentSize().graphicsLayer { alpha = 0.8f }.blur(20.dp, BlurredEdgeTreatment.Unbounded)) {
+            scanRing(angle, corner)
         }
-        Canvas(Modifier.matchParentSize()) { rainbowRing(angle, corner) }
+        Canvas(Modifier.matchParentSize()) { scanRing(angle, corner) }
     }
 }
 
@@ -198,16 +179,14 @@ fun Reveal(delayMs: Int, content: @Composable () -> Unit) {
     ) { content() }
 }
 
-/* ───────── agent-style processing steps ───────── */
-
-private val STEP_TITLES = listOf("Preparing photo", "Uploading to Gemini", "Recognising make & model", "Reading the answer")
+/* ───────── segmented stage progress ───────── */
 
 /**
- * Live checklist of what the app is really doing. [stage] is the current stage,
+ * Four-segment progress bar of what the app is really doing. [stage] is the current stage,
  * [starts] holds when each stage began (elapsedRealtime ms, null = not reached).
  */
 @Composable
-fun ProcessingSteps(stage: Int, starts: List<Long?>, note: String?, modifier: Modifier = Modifier) {
+fun StageProgress(stage: Int, starts: List<Long?>, note: String?, modifier: Modifier = Modifier) {
     val now by produceState(SystemClock.elapsedRealtime()) {
         while (true) { delay(100); value = SystemClock.elapsedRealtime() }
     }
@@ -215,83 +194,57 @@ fun ProcessingSteps(stage: Int, starts: List<Long?>, note: String?, modifier: Mo
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
 
     Column(modifier) {
-        STEP_TITLES.forEachIndexed { i, title ->
-            Reveal(i * 70) {
-                Row(Modifier.fillMaxWidth().padding(vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.size(20.dp), contentAlignment = Alignment.Center) {
-                        when {
-                            i < stage -> DoneCheck()
-                            i == stage -> RainbowSpinner(Modifier.fillMaxSize())
-                            else -> Box(Modifier.size(6.dp).clip(CircleShape).background(muted.copy(alpha = 0.35f)))
-                        }
-                    }
-                    Spacer(Modifier.width(14.dp))
-                    Column(Modifier.weight(1f)) {
-                        when {
-                            i == stage -> ShimmerText(title, fg, muted)
-                            i < stage -> Text(title, style = MaterialTheme.typography.bodyLarge, color = fg.copy(alpha = 0.75f))
-                            else -> Text(title, style = MaterialTheme.typography.bodyLarge, color = muted.copy(alpha = 0.5f))
-                        }
-                        AnimatedVisibility(i == stage && note != null, enter = fadeIn() + expandVertically(), exit = fadeOut() + shrinkVertically()) {
-                            Text(note.orEmpty(), style = MaterialTheme.typography.labelMedium, color = muted, modifier = Modifier.padding(top = 2.dp))
-                        }
-                    }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Step ${stage + 1} of ${STEP_SHORT.size}", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = muted, modifier = Modifier.weight(1f))
+            val t0 = starts.firstOrNull()
+            if (t0 != null) Text("%.1fs".format((now - t0) / 1000f), fontSize = 13.sp, color = muted)
+        }
+        Spacer(Modifier.height(14.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            STEP_SHORT.forEachIndexed { i, label ->
+                Column(Modifier.weight(1f)) {
+                    Segment(done = i < stage, current = i == stage)
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        label, fontSize = 12.sp, fontWeight = if (i == stage) FontWeight.SemiBold else FontWeight.Normal,
+                        color = if (i <= stage) fg else muted.copy(alpha = 0.6f)
+                    )
                     // Real time spent in each finished step.
                     val start = starts.getOrNull(i)
                     val end = starts.getOrNull(i + 1)
-                    if (i < stage && start != null && end != null) {
-                        Text("%.1fs".format((end - start) / 1000f), style = MaterialTheme.typography.labelMedium, color = muted)
-                    }
+                    Text(
+                        if (i < stage && start != null && end != null) "%.1fs".format((end - start) / 1000f) else " ",
+                        fontSize = 12.sp, color = muted
+                    )
                 }
             }
         }
-        val t0 = starts.firstOrNull()
-        if (t0 != null) {
-            Spacer(Modifier.height(10.dp))
-            Text("%.1fs elapsed".format((now - t0) / 1000f), style = MaterialTheme.typography.labelMedium, color = muted.copy(alpha = 0.7f))
+        AnimatedVisibility(note != null, enter = fadeIn() + expandVertically(), exit = fadeOut() + shrinkVertically()) {
+            Text(note.orEmpty(), fontSize = 13.sp, color = muted, modifier = Modifier.padding(top = 10.dp))
         }
     }
 }
 
+/** One bar: fills when its step is done, runs a light sweep while it's the current step. */
 @Composable
-private fun ShimmerText(text: String, fg: Color, muted: Color) {
-    val x by rememberInfiniteTransition(label = "shimmer").animateFloat(
-        -300f, 900f, infiniteRepeatable(tween(1400, easing = LinearEasing)), label = "x"
+private fun Segment(done: Boolean, current: Boolean) {
+    val accent = MaterialTheme.colorScheme.primary
+    val track = MaterialTheme.colorScheme.outline.copy(alpha = 0.6f)
+    val fill by animateFloatAsState(if (done) 1f else 0f, spring(dampingRatio = 1f, stiffness = 300f), label = "fill")
+    val sweep by rememberInfiniteTransition(label = "sweep").animateFloat(
+        -0.4f, 1f, infiniteRepeatable(tween(1100, easing = EaseInOutCubic)), label = "x"
     )
-    Text(
-        text,
-        style = MaterialTheme.typography.bodyLarge.copy(
-            brush = Brush.linearGradient(listOf(muted, fg, muted), start = Offset(x, 0f), end = Offset(x + 300f, 0f))
-        ),
-        fontWeight = FontWeight.Medium,
-    )
-}
-
-@Composable
-private fun RainbowSpinner(modifier: Modifier) {
-    val angle by rememberInfiniteTransition(label = "spin").animateFloat(
-        0f, 360f, infiniteRepeatable(tween(900, easing = LinearEasing)), label = "a"
-    )
-    Canvas(modifier) {
-        val w = 2.dp.toPx()
-        rotate(angle) {
-            drawArc(Brush.sweepGradient(RAINBOW), 0f, 280f, false,
-                topLeft = Offset(w, w), size = Size(size.width - 2 * w, size.height - 2 * w),
-                style = Stroke(w, cap = StrokeCap.Round))
+    Canvas(Modifier.fillMaxWidth().height(5.dp)) {
+        val r = CornerRadius(size.height / 2)
+        drawRoundRect(track, cornerRadius = r)
+        if (current) {
+            drawRoundRect(accent.copy(alpha = 0.25f), cornerRadius = r)
+            val x = sweep * size.width
+            drawRoundRect(
+                accent, Offset(max(0f, x), 0f),
+                Size(min(size.width, x + size.width * 0.4f) - max(0f, x), size.height), r
+            )
         }
-    }
-}
-
-@Composable
-private fun DoneCheck() {
-    val p = remember { Animatable(0f) }
-    LaunchedEffect(Unit) { p.animateTo(1f, spring(dampingRatio = 0.5f, stiffness = 500f)) }
-    Canvas(Modifier.fillMaxSize().graphicsLayer { scaleX = p.value; scaleY = p.value }) {
-        drawCircle(DONE_GREEN.copy(alpha = 0.18f))
-        val s = size.width
-        drawPath(
-            Path().apply { moveTo(s * 0.3f, s * 0.52f); lineTo(s * 0.45f, s * 0.66f); lineTo(s * 0.71f, s * 0.38f) },
-            DONE_GREEN, style = Stroke(1.8.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
-        )
+        if (fill > 0f) drawRoundRect(accent, size = Size(size.width * fill, size.height), cornerRadius = r)
     }
 }

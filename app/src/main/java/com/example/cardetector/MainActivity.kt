@@ -20,6 +20,8 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -32,16 +34,24 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
@@ -118,22 +128,26 @@ fun friendlyError(e: Exception): String = when {
     else -> "Something went wrong. Try again."
 }
 
+// iOS system palette: grouped background, white/elevated cards, system blue accent.
 private val LightColors = lightColorScheme(
-    primary = Color(0xFF111111), onPrimary = Color.White,
-    background = Color(0xFFF5F5F3), onBackground = Color(0xFF111111),
-    surface = Color(0xFFF5F5F3), onSurface = Color(0xFF111111),
-    surfaceVariant = Color(0xFFE8E8E5), onSurfaceVariant = Color(0xFF6E6E6E),
-    outline = Color(0xFFD4D4D0),
+    primary = Color(0xFF007AFF), onPrimary = Color.White,
+    secondaryContainer = Color(0xFFE5F0FF), onSecondaryContainer = Color(0xFF007AFF),
+    background = Color(0xFFF2F2F7), onBackground = Color.Black,
+    surface = Color(0xFFF2F2F7), onSurface = Color.Black,
+    surfaceVariant = Color.White, onSurfaceVariant = Color(0xFF6C6C70),
+    outline = Color(0xFFD1D1D6),
 )
 private val DarkColors = darkColorScheme(
-    primary = Color(0xFFF2F2F2), onPrimary = Color(0xFF111111),
-    background = Color(0xFF070707), onBackground = Color(0xFFF2F2F2),
-    surface = Color(0xFF070707), onSurface = Color(0xFFF2F2F2),
-    surfaceVariant = Color(0xFF1A1A1C), onSurfaceVariant = Color(0xFF8E8E93),
-    outline = Color(0xFF2C2F36),
+    primary = Color(0xFF0A84FF), onPrimary = Color.White,
+    secondaryContainer = Color(0xFF0C2340), onSecondaryContainer = Color(0xFF4DA3FF),
+    background = Color.Black, onBackground = Color.White,
+    surface = Color.Black, onSurface = Color.White,
+    surfaceVariant = Color(0xFF1C1C1E), onSurfaceVariant = Color(0xFF8E8E93),
+    outline = Color(0xFF38383A),
 )
 
-val LABELS = listOf("Thinking", "Searching", "Analyzing", "Composing")
+// Viewfinder stays dark in both themes, like a camera.
+val VIEWFINDER = Color(0xFF0E0E10)
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -203,71 +217,65 @@ class MainActivity : ComponentActivity() {
             b?.let { analyse(it) }
         }
 
-        val muted = MaterialTheme.colorScheme.onSurfaceVariant
-        val corner = 28.dp
+        val corner = 36.dp
 
-        Column(Modifier.fillMaxSize().safeDrawingPadding().padding(horizontal = 24.dp)) {
-            Spacer(Modifier.height(28.dp))
-            Row(verticalAlignment = Alignment.Top) {
-                Column(Modifier.weight(1f)) {
-                    Text("CAR DETECTOR", style = MaterialTheme.typography.labelMedium, letterSpacing = 2.sp, color = muted)
-                    Spacer(Modifier.height(6.dp))
-                    Text("Identify any car.", style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.SemiBold)
-                }
-                ThemeToggle(dark, onToggleTheme)
-            }
-            Spacer(Modifier.height(24.dp))
+        Column(Modifier.fillMaxSize().safeDrawingPadding().padding(horizontal = 12.dp)) {
+            Spacer(Modifier.height(6.dp))
 
+            // Viewfinder: takes all spare height, shrinks when results slide in below.
             // Card is inset 3dp so the rainbow ring can show around it while the AI works.
-            Box(Modifier.fillMaxWidth().aspectRatio(4f / 3f)) {
+            Box(Modifier.fillMaxWidth().weight(1f)) {
                 androidx.compose.animation.AnimatedVisibility(
                     loading, Modifier.matchParentSize(), enter = fadeIn(tween(400)), exit = fadeOut(tween(500))
-                ) { RainbowGlow(corner + 3.dp, Modifier.fillMaxSize()) }
+                ) { ScanGlow(corner + 3.dp, Modifier.fillMaxSize()) }
 
                 Box(
                     Modifier.matchParentSize().padding(3.dp)
                         .clip(RoundedCornerShape(corner))
-                        .background(MaterialTheme.colorScheme.surfaceVariant),
+                        .background(VIEWFINDER),
                     contentAlignment = Alignment.Center
                 ) {
                     val p = photo
                     if (p != null) {
                         Image(p.asImageBitmap(), "Selected car photo", Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
                     } else {
+                        FrameBrackets(Modifier.fillMaxSize().padding(28.dp))
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text("No photo yet", style = MaterialTheme.typography.titleMedium)
-                            Spacer(Modifier.height(4.dp))
-                            Text("Take one or pick from your gallery", style = MaterialTheme.typography.bodyMedium, color = muted)
+                            Text("Point at any car", color = Color.White, fontSize = 26.sp, fontWeight = FontWeight.Bold, letterSpacing = (-0.5).sp)
+                            Spacer(Modifier.height(6.dp))
+                            Text("Tap the shutter, or pick a photo.", color = Color.White.copy(alpha = 0.6f), fontSize = 15.sp, textAlign = TextAlign.Center)
                         }
                     }
                     androidx.compose.animation.AnimatedVisibility(
                         loading, Modifier.matchParentSize(), enter = fadeIn(tween(300)), exit = fadeOut(tween(400))
-                    ) { ThinkingOverlay() }
+                    ) { ScanOverlay(stage, Modifier.fillMaxSize()) }
+                    TitleChip(Modifier.align(Alignment.TopCenter).padding(top = 18.dp))
                 }
             }
 
-            Spacer(Modifier.height(28.dp))
-
-            Crossfade(targetState = Triple(car, message, loading), label = "result", modifier = Modifier.weight(1f)) { (c, msg, busy) ->
-                Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+            AnimatedContent(
+                targetState = Triple(car, message, loading), label = "result",
+                transitionSpec = { fadeIn(tween(300, delayMillis = 100)) togetherWith fadeOut(tween(150)) using SizeTransform(clip = false) },
+            ) { (c, msg, busy) ->
+                Column(Modifier.fillMaxWidth().heightIn(max = 380.dp).verticalScroll(rememberScrollState())) {
                     when {
                         c != null -> CarResult(c)
-                        msg != null -> Reveal(0) { Text(msg, style = MaterialTheme.typography.bodyLarge, color = muted) }
-                        busy -> ProcessingSteps(stage, stageStarts, stageNote)
-                        else -> Text("Results appear here.", style = MaterialTheme.typography.bodyLarge, color = muted)
+                        msg != null -> Reveal(0) { Panel { Text(msg, fontSize = 17.sp, lineHeight = 22.sp) } }
+                        busy -> Panel { StageProgress(stage, stageStarts, stageNote) }
                     }
                 }
             }
 
-            Row(Modifier.fillMaxWidth().padding(vertical = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                OutlinedButton(
-                    onClick = { camera.launch(null) }, enabled = !loading,
-                    modifier = Modifier.weight(1f).height(56.dp), shape = CircleShape
-                ) { Text("Camera", style = MaterialTheme.typography.titleSmall) }
-                Button(
-                    onClick = { gallery.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
-                    enabled = !loading, modifier = Modifier.weight(1f).height(56.dp), shape = CircleShape
-                ) { Text("Gallery", style = MaterialTheme.typography.titleSmall) }
+            // Camera-style control bar: gallery · shutter · theme.
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 18.dp),
+                horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically
+            ) {
+                GalleryButton(photo, enabled = !loading) {
+                    gallery.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                }
+                Shutter(enabled = !loading) { camera.launch(null) }
+                ThemeToggle(dark, onToggleTheme)
             }
         }
     }
@@ -282,48 +290,118 @@ class MainActivity : ComponentActivity() {
         return contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, opts) }
     }
 
-    /** Dimmed photo with the dotted orb and a cycling "Thinking / Searching / …" label. */
-    @Composable
-    fun ThinkingOverlay() {
-        var i by remember { mutableIntStateOf(0) }
-        LaunchedEffect(Unit) { while (true) { delay(1150); i = (i + 1) % LABELS.size } }
-        Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.6f)), contentAlignment = Alignment.Center) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                ThinkingOrb(program = i, color = Color.White, modifier = Modifier.size(132.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    AnimatedContent(
-                        LABELS[i], label = "label",
-                        transitionSpec = {
-                            (fadeIn(tween(260)) + slideInVertically(tween(260)) { it / 3 }) togetherWith
-                                (fadeOut(tween(200)) + slideOutVertically(tween(200)) { -it / 3 })
-                        }
-                    ) { Text(it, color = Color.White.copy(alpha = 0.85f), style = MaterialTheme.typography.titleSmall) }
-                    Spacer(Modifier.width(6.dp))
-                    BlinkingDots(Color.White.copy(alpha = 0.85f), Modifier.size(width = 16.dp, height = 4.dp))
-                }
-            }
-        }
-    }
-
     /** Circle, half filled: the classic light/dark switch. */
     @Composable
     fun ThemeToggle(dark: Boolean, onClick: () -> Unit) {
         val fg = MaterialTheme.colorScheme.onSurface
-        val turn by animateFloatAsState(if (dark) 180f else 0f, tween(500, easing = EaseInOutCubic), label = "turn")
+        val turn by animateFloatAsState(if (dark) 180f else 0f, spring(dampingRatio = 0.8f, stiffness = 300f), label = "turn")
         Box(
-            Modifier.size(44.dp).clip(CircleShape)
-                .border(1.dp, MaterialTheme.colorScheme.outline, CircleShape)
+            Modifier.size(54.dp)
                 .semantics { contentDescription = if (dark) "Switch to light theme" else "Switch to dark theme" }
-                .clickable(onClick = onClick),
+                .pressable(onClick = onClick)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.surfaceVariant),
             contentAlignment = Alignment.Center
         ) {
-            Canvas(Modifier.size(18.dp)) {
+            Canvas(Modifier.size(20.dp)) {
                 val r = size.minDimension / 2
                 drawCircle(fg, r - 1.dp.toPx(), style = Stroke(1.5.dp.toPx()))
                 drawArc(fg, 90f + turn, 180f, true, topLeft = Offset(1.dp.toPx(), 1.dp.toPx()),
                     size = Size(size.width - 2.dp.toPx(), size.height - 2.dp.toPx()))
             }
         }
+    }
+
+    /** Shrinks on touch-down (not on release) with a critically damped spring, like iOS controls. */
+    @Composable
+    fun Modifier.pressable(enabled: Boolean = true, onClick: () -> Unit): Modifier {
+        val source = remember { MutableInteractionSource() }
+        val pressed by source.collectIsPressedAsState()
+        val scale by animateFloatAsState(if (pressed) 0.9f else 1f, spring(dampingRatio = 1f, stiffness = 440f), label = "press")
+        val alpha by animateFloatAsState(if (enabled) 1f else 0.35f, tween(200), label = "enabled")
+        return graphicsLayer { scaleX = scale; scaleY = scale; this.alpha = alpha }
+            .clickable(source, indication = null, enabled = enabled, role = Role.Button, onClick = onClick)
+    }
+
+    /** Big round shutter, like the iOS Camera app. Opens the camera. */
+    @Composable
+    fun Shutter(enabled: Boolean, onClick: () -> Unit) {
+        val fg = MaterialTheme.colorScheme.onSurface
+        Box(
+            Modifier.size(78.dp)
+                .semantics { contentDescription = "Take photo" }
+                .pressable(enabled, onClick)
+                .border(4.dp, fg, CircleShape)
+                .padding(8.dp)
+                .clip(CircleShape)
+                .background(fg)
+        )
+    }
+
+    /** Rounded square showing the last photo (or a stack glyph). Opens the gallery. */
+    @Composable
+    fun GalleryButton(photo: Bitmap?, enabled: Boolean, onClick: () -> Unit) {
+        val shape = RoundedCornerShape(16.dp)
+        Box(
+            Modifier.size(54.dp)
+                .semantics { contentDescription = "Choose from gallery" }
+                .pressable(enabled, onClick)
+                .clip(shape)
+                .background(MaterialTheme.colorScheme.surfaceVariant)
+                .border(1.5.dp, MaterialTheme.colorScheme.outline, shape),
+            contentAlignment = Alignment.Center
+        ) {
+            if (photo != null) {
+                Image(photo.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+            } else {
+                val fg = MaterialTheme.colorScheme.onSurface
+                Canvas(Modifier.size(22.dp)) {
+                    val st = Stroke(1.6.dp.toPx(), join = StrokeJoin.Round)
+                    val s = size.width; val r = CornerRadius(4.dp.toPx())
+                    drawRoundRect(fg.copy(alpha = 0.45f), Offset(s * 0.28f, 0f), Size(s * 0.72f, s * 0.72f), r, style = st)
+                    drawRoundRect(fg, Offset(0f, s * 0.28f), Size(s * 0.72f, s * 0.72f), r, style = st)
+                }
+            }
+        }
+    }
+
+    /** Camera-style focus brackets in the four corners of the empty viewfinder. */
+    @Composable
+    fun FrameBrackets(modifier: Modifier) {
+        Canvas(modifier) {
+            val len = 30.dp.toPx(); val w = size.width; val h = size.height
+            val st = Stroke(3.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+            val c = Color.White.copy(alpha = 0.7f)
+            for ((x, y) in listOf(0f to 0f, w to 0f, 0f to h, w to h)) {
+                val dx = if (x == 0f) len else -len
+                val dy = if (y == 0f) len else -len
+                drawPath(Path().apply { moveTo(x, y + dy); lineTo(x, y); lineTo(x + dx, y) }, c, style = st)
+            }
+        }
+    }
+
+    /** Frosted pill with the app name, floating on the viewfinder. */
+    @Composable
+    fun TitleChip(modifier: Modifier) {
+        Row(
+            modifier.clip(CircleShape).background(Color.Black.copy(alpha = 0.4f)).padding(horizontal = 12.dp, vertical = 7.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(Modifier.size(7.dp).clip(CircleShape).background(DONE_GREEN))
+            Spacer(Modifier.width(7.dp))
+            Text("Car Detector", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 0.2.sp)
+        }
+    }
+
+    /** Rounded card on the page background. */
+    @Composable
+    fun Panel(content: @Composable ColumnScope.() -> Unit) {
+        Column(
+            Modifier.fillMaxWidth().padding(top = 12.dp).clip(RoundedCornerShape(28.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant)
+                .padding(horizontal = 20.dp, vertical = 18.dp),
+            content = content
+        )
     }
 
     @Composable
@@ -334,49 +412,56 @@ class MainActivity : ComponentActivity() {
         val bar = remember { Animatable(0f) }
         LaunchedEffect(Unit) { delay(300); bar.animateTo(confidence / 100f, tween(900, easing = EaseOutQuint)) }
 
-        Reveal(0) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(8.dp).clip(CircleShape).background(DONE_GREEN))
-                Spacer(Modifier.width(8.dp))
-                Text(c.optString("make").uppercase(), style = MaterialTheme.typography.labelLarge, letterSpacing = 1.5.sp, color = muted)
-            }
-        }
-        Reveal(80) { Text(c.optString("model"), fontSize = 34.sp, lineHeight = 40.sp, fontWeight = FontWeight.SemiBold) }
-        Spacer(Modifier.height(24.dp))
-
-        Row(Modifier.fillMaxWidth()) {
-            Box(Modifier.weight(1f)) { Reveal(160) { Stat("Year", c.optString("year_range")) } }
-            Box(Modifier.weight(1f)) {
-                Reveal(220) {
-                    Column {
-                        Text("Colour", style = MaterialTheme.typography.labelMedium, color = muted)
-                        Spacer(Modifier.height(4.dp))
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            if (swatch != null) {
-                                Box(Modifier.size(12.dp).clip(CircleShape).background(swatch)
-                                    .border(1.dp, MaterialTheme.colorScheme.outline, CircleShape))
-                                Spacer(Modifier.width(8.dp))
-                            }
-                            Text(c.optString("colour").replaceFirstChar { it.uppercase() }, style = MaterialTheme.typography.titleMedium)
-                        }
-                    }
+        Column(Modifier.padding(start = 6.dp, end = 6.dp, top = 18.dp)) {
+            Reveal(0) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(8.dp).clip(CircleShape).background(DONE_GREEN))
+                    Spacer(Modifier.width(8.dp))
+                    Text(c.optString("make").uppercase(), fontSize = 13.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.2.sp, color = muted)
                 }
             }
-            Box(Modifier.weight(1f)) { Reveal(280) { Stat("Confidence", "$confidence%") } }
+            Reveal(80) { Text(c.optString("model"), fontSize = 34.sp, lineHeight = 38.sp, fontWeight = FontWeight.Bold, letterSpacing = (-0.8).sp) }
         }
-        Spacer(Modifier.height(20.dp))
-        // Confidence bar that fills up, in the theme colour.
-        Box(Modifier.fillMaxWidth().height(4.dp).clip(CircleShape).background(MaterialTheme.colorScheme.surfaceVariant)) {
-            Box(Modifier.fillMaxWidth(bar.value).fillMaxHeight().clip(CircleShape).background(MaterialTheme.colorScheme.primary))
+        Spacer(Modifier.height(14.dp))
+
+        Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Tile("Year", 160) { Text(c.optString("year_range"), fontSize = 17.sp, fontWeight = FontWeight.SemiBold, maxLines = 1) }
+            Tile("Colour", 220) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (swatch != null) {
+                        Box(Modifier.size(14.dp).clip(CircleShape).background(swatch)
+                            .border(0.5.dp, MaterialTheme.colorScheme.outline, CircleShape))
+                        Spacer(Modifier.width(6.dp))
+                    }
+                    Text(c.optString("colour").replaceFirstChar { it.uppercase() }, fontSize = 17.sp, fontWeight = FontWeight.SemiBold,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
+            Tile("Match", 280) {
+                Text("$confidence%", fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(8.dp))
+                // Confidence bar that fills up, in the accent colour.
+                Box(Modifier.fillMaxWidth().height(5.dp).clip(CircleShape).background(MaterialTheme.colorScheme.outline.copy(alpha = 0.6f))) {
+                    Box(Modifier.fillMaxWidth(bar.value).fillMaxHeight().clip(CircleShape).background(MaterialTheme.colorScheme.primary))
+                }
+            }
         }
     }
 
+    /** Small stat card: label on top, value below. */
     @Composable
-    fun Stat(label: String, value: String) {
-        Column {
-            Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Spacer(Modifier.height(4.dp))
-            Text(value, style = MaterialTheme.typography.titleMedium)
+    fun RowScope.Tile(label: String, delayMs: Int, value: @Composable ColumnScope.() -> Unit) {
+        Box(Modifier.weight(1f).fillMaxHeight()) {
+            Reveal(delayMs) {
+                Column(
+                    Modifier.fillMaxSize().clip(RoundedCornerShape(22.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant).padding(14.dp)
+                ) {
+                    Text(label, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.height(6.dp))
+                    value()
+                }
+            }
         }
     }
 }
