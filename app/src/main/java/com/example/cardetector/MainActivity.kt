@@ -15,12 +15,13 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -30,6 +31,7 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
@@ -37,8 +39,8 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
@@ -91,7 +93,7 @@ fun identifyCar(original: Bitmap, onStage: (stage: Int, note: String?) -> Unit =
         conn.doOutput = true
         conn.setRequestProperty("Content-Type", "application/json")
         conn.setRequestProperty("x-goog-api-key", BuildConfig.GEMINI_API_KEY)
-        conn.setFixedLengthStreamingMode(payload.size) // actually sends while writing, so "Uploading" is real
+        conn.setFixedLengthStreamingMode(payload.size) // actually sends whchange ile writing, so "Uploading" is real
         conn.outputStream.use { it.write(payload) }
         onStage(RECOGNISING, model)
         if (conn.responseCode != 429 && conn.responseCode != 503) break
@@ -114,18 +116,18 @@ fun friendlyError(e: Exception): String = when {
     else -> "Something went wrong. Try again."
 }
 
-// Printed spec sheet: warm paper + black ink by day, ink + paper by night, one signal-orange accent.
+// Motoring-magazine look: warm paper (or graphite) page, serif type, hairlines, one racing-red accent.
 private val LightColors = lightColorScheme(
-    primary = SIGNAL, onPrimary = Color.Black,
-    background = Color(0xFFF1EDE4), onBackground = Color(0xFF111111),
-    surface = Color(0xFFF1EDE4), onSurface = Color(0xFF111111),
-    onSurfaceVariant = Color(0xFF6B665C), outline = Color(0xFFD6D0C3),
+    primary = ACCENT, onPrimary = Color.White,
+    background = Color(0xFFF4F1EA), onBackground = Color(0xFF161513),
+    surface = Color(0xFFF4F1EA), onSurface = Color(0xFF161513),
+    surfaceVariant = Color(0xFFE6E1D6), onSurfaceVariant = Color(0xFF7A756B),
 )
 private val DarkColors = darkColorScheme(
-    primary = SIGNAL, onPrimary = Color.Black,
-    background = Color(0xFF121110), onBackground = Color(0xFFF1EDE4),
-    surface = Color(0xFF121110), onSurface = Color(0xFFF1EDE4),
-    onSurfaceVariant = Color(0xFF8F897D), outline = Color(0xFF2E2C29),
+    primary = ACCENT, onPrimary = Color.White,
+    background = Color(0xFF121211), onBackground = Color(0xFFEDE9E0),
+    surface = Color(0xFF121211), onSurface = Color(0xFFEDE9E0),
+    surfaceVariant = Color(0xFF1F1E1C), onSurfaceVariant = Color(0xFF8E897F),
 )
 
 class MainActivity : ComponentActivity() {
@@ -154,12 +156,11 @@ class MainActivity : ComponentActivity() {
         var loading by remember { mutableStateOf(false) }
         var stage by remember { mutableIntStateOf(PREPARING) }
         var stageNote by remember { mutableStateOf<String?>(null) }
-        var runs by rememberSaveable { mutableIntStateOf(0) }
         val stageStarts = remember { mutableStateListOf<Long?>(null, null, null, null, null) }
         val scope = rememberCoroutineScope()
 
         fun analyse(b: Bitmap) {
-            photo = b; car = null; message = null; loading = true; runs++
+            photo = b; car = null; message = null; loading = true
             stage = PREPARING; stageNote = null
             for (i in stageStarts.indices) stageStarts[i] = null
             scope.launch {
@@ -171,8 +172,8 @@ class MainActivity : ComponentActivity() {
                                 stage = st
                                 stageNote = when {
                                     note == null -> null
-                                    st == RECOGNISING -> "model $note"
-                                    else -> note.lowercase()
+                                    st == RECOGNISING -> "Model: $note"
+                                    else -> note
                                 }
                             }
                         }
@@ -198,82 +199,103 @@ class MainActivity : ComponentActivity() {
         }
 
         val ink = MaterialTheme.colorScheme.onBackground
+        val paper = MaterialTheme.colorScheme.background
         val muted = MaterialTheme.colorScheme.onSurfaceVariant
 
-        Column(
-            Modifier.fillMaxSize().safeDrawingPadding().verticalScroll(rememberScrollState())
-                .padding(horizontal = 20.dp, vertical = 12.dp)
-        ) {
-            // Masthead
-            Row(verticalAlignment = Alignment.Bottom) {
-                Text("CAR\nDETECTOR", fontSize = 40.sp, lineHeight = 38.sp, fontWeight = FontWeight.Black,
-                    letterSpacing = (-1.5).sp, modifier = Modifier.weight(1f))
-                TextButtonBox(if (dark) "LIGHT" else "DARK", filled = false,
-                    desc = if (dark) "Switch to light theme" else "Switch to dark theme", onClick = onToggleTheme)
-            }
-            Spacer(Modifier.height(10.dp))
-            Rule(ink, 2.dp)
-            Row(Modifier.padding(vertical = 6.dp)) {
-                Label("VISUAL ID · GEMINI", Modifier.weight(1f))
-                Label("SHEET NO. %03d".format(runs.coerceAtLeast(1)))
-            }
-            Rule(ink, 1.dp)
-            Spacer(Modifier.height(16.dp))
-
-            // Photo plate
-            Box(Modifier.fillMaxWidth().aspectRatio(4f / 3f).border(1.5.dp, ink)) {
-                val p = photo
-                if (p != null) {
-                    val dim by animateFloatAsState(if (loading) 0.55f else 1f, tween(300), label = "dim")
-                    Image(p.asImageBitmap(), "Selected car photo", Modifier.fillMaxSize().padding(1.5.dp).graphicsLayer { alpha = dim },
-                        contentScale = ContentScale.Crop)
-                } else {
-                    Hatch(Modifier.fillMaxSize())
-                    Column(Modifier.align(Alignment.Center).background(MaterialTheme.colorScheme.background).padding(horizontal = 14.dp, vertical = 10.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text("NO PHOTO", fontFamily = MONO, fontSize = 15.sp, fontWeight = FontWeight.Bold)
-                        Text("shoot or pick a car", fontFamily = MONO, fontSize = 12.sp, color = muted)
+        Box(Modifier.fillMaxSize()) {
+            Column(
+                Modifier.fillMaxSize().safeDrawingPadding().verticalScroll(rememberScrollState())
+                    .padding(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 104.dp)
+            ) {
+                // Masthead
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Kicker("Car Detector", ACCENT)
+                        Text("What car is that?", fontFamily = SERIF, fontWeight = FontWeight.Bold, fontSize = 30.sp)
                     }
+                    Box(
+                        Modifier.size(44.dp).clip(CircleShape).border(1.5.dp, ink.copy(alpha = 0.2f), CircleShape)
+                            .semantics { contentDescription = if (dark) "Switch to light theme" else "Switch to dark theme" }
+                            .clickable(role = Role.Button, onClick = onToggleTheme),
+                        contentAlignment = Alignment.Center
+                    ) { Text(if (dark) "\u2600\uFE0E" else "☾", fontSize = 18.sp) }
                 }
-                Label("FIG. 1", Modifier.align(Alignment.TopStart).background(ink).padding(horizontal = 6.dp, vertical = 2.dp),
-                    color = MaterialTheme.colorScheme.background)
-                if (loading) WorkStripe(Modifier.align(Alignment.BottomStart))
-            }
-            Spacer(Modifier.height(12.dp))
+                Spacer(Modifier.height(20.dp))
 
-            // Actions
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                TextButtonBox("● CAMERA", filled = true, desc = "Take photo", enabled = !loading, modifier = Modifier.weight(1f)) {
-                    camera.launch(null)
+                // Viewfinder
+                Box(
+                    Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(20.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                ) {
+                    val p = photo
+                    if (p != null) {
+                        val dim by animateFloatAsState(if (loading) 0.7f else 1f, tween(300), label = "dim")
+                        Image(p.asImageBitmap(), "Selected car photo", Modifier.fillMaxSize().graphicsLayer { alpha = dim },
+                            contentScale = ContentScale.Crop)
+                        if (loading) ScanLine(Modifier.matchParentSize())
+                    } else {
+                        Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
+                            CarGlyph(Modifier.size(width = 120.dp, height = 60.dp), muted)
+                            Spacer(Modifier.height(16.dp))
+                            Text("Point at any car", fontFamily = SERIF, fontStyle = FontStyle.Italic, fontSize = 18.sp, color = muted)
+                        }
+                    }
+                    Brackets(Modifier.matchParentSize().padding(16.dp), if (p != null) Color.White else muted)
                 }
-                TextButtonBox("▤ GALLERY", filled = false, desc = "Choose from gallery", enabled = !loading, modifier = Modifier.weight(1f)) {
-                    gallery.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-                }
-            }
-            Spacer(Modifier.height(28.dp))
+                Spacer(Modifier.height(28.dp))
 
-            AnimatedContent(
-                targetState = Triple(car, message, loading), label = "result",
-                transitionSpec = { fadeIn(tween(250, delayMillis = 80)) togetherWith fadeOut(tween(120)) using SizeTransform(clip = false) },
-            ) { (c, msg, busy) ->
-                Column(Modifier.fillMaxWidth()) {
-                    when {
-                        c != null -> CarResult(c)
-                        msg != null -> Reveal(0) {
-                            Row(Modifier.fillMaxWidth().border(1.5.dp, SIGNAL).padding(16.dp)) {
-                                Text("!", fontFamily = MONO, fontWeight = FontWeight.Black, color = SIGNAL, fontSize = 17.sp)
-                                Spacer(Modifier.width(12.dp))
-                                Text(msg, fontSize = 16.sp, lineHeight = 21.sp)
+                AnimatedContent(
+                    targetState = Triple(car, message, loading), label = "result",
+                    transitionSpec = { fadeIn(tween(250, delayMillis = 80)) togetherWith fadeOut(tween(120)) using SizeTransform(clip = false) },
+                ) { (c, msg, busy) ->
+                    Column(Modifier.fillMaxWidth()) {
+                        when {
+                            c != null -> CarResult(c)
+                            msg != null -> Reveal(0) {
+                                Row(Modifier.height(IntrinsicSize.Min)) {
+                                    Box(Modifier.width(3.dp).fillMaxHeight().background(ACCENT))
+                                    Column(Modifier.padding(start = 14.dp)) {
+                                        Kicker("Couldn't identify", ACCENT)
+                                        Text(msg, fontFamily = SERIF, fontSize = 22.sp, lineHeight = 28.sp,
+                                            modifier = Modifier.padding(top = 4.dp))
+                                    }
+                                }
                             }
+                            busy -> Reveal(0) {
+                                Column {
+                                    Kicker("Working", modifier = Modifier.padding(bottom = 8.dp))
+                                    StageLog(stage, stageStarts, stageNote)
+                                }
+                            }
+                            else -> Text("Snap a photo or pick one from your gallery. You'll get the make, model, year and colour.",
+                                color = muted, fontFamily = SERIF, fontSize = 17.sp, lineHeight = 24.sp)
                         }
-                        busy -> {
-                            Label("PROCESSING")
-                            Spacer(Modifier.height(10.dp))
-                            StageLog(stage, stageStarts, stageNote)
-                        }
-                        else -> Text("Results print here.", fontFamily = MONO, fontSize = 13.sp, color = muted)
                     }
                 }
+            }
+
+            // Bottom action bar
+            Row(
+                Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(paper)
+                    .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal))
+                    .padding(horizontal = 20.dp, vertical = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Button(
+                    onClick = { camera.launch(null) }, enabled = !loading, modifier = Modifier.weight(1f).height(60.dp),
+                    shape = RoundedCornerShape(18.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = ink, contentColor = paper),
+                ) {
+                    CameraGlyph(Modifier.size(22.dp), paper, ink)
+                    Spacer(Modifier.width(10.dp))
+                    Text("Take photo", fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+                }
+                OutlinedButton(
+                    onClick = { gallery.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+                    enabled = !loading, shape = RoundedCornerShape(18.dp), contentPadding = PaddingValues(0.dp),
+                    border = BorderStroke(1.5.dp, ink.copy(alpha = if (loading) 0.2f else 1f)),
+                    modifier = Modifier.size(60.dp).semantics { contentDescription = "Choose from gallery" },
+                ) { GalleryGlyph(Modifier.size(24.dp), ink.copy(alpha = if (loading) 0.3f else 1f)) }
             }
         }
     }
@@ -289,78 +311,31 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
-    fun Rule(color: Color, thickness: androidx.compose.ui.unit.Dp) =
-        Box(Modifier.fillMaxWidth().height(thickness).background(color))
-
-    @Composable
-    fun Label(text: String, modifier: Modifier = Modifier, color: Color = MaterialTheme.colorScheme.onSurfaceVariant) =
-        Text(text, modifier, color = color, fontFamily = MONO, fontSize = 11.sp, letterSpacing = 1.sp, fontWeight = FontWeight.Medium)
-
-    /** Square-cornered button: orange fill or ink outline. Sinks a little on touch-down. */
-    @Composable
-    fun TextButtonBox(
-        text: String, filled: Boolean, desc: String, modifier: Modifier = Modifier,
-        enabled: Boolean = true, onClick: () -> Unit,
-    ) {
-        val ink = MaterialTheme.colorScheme.onBackground
-        val source = remember { MutableInteractionSource() }
-        val pressed by source.collectIsPressedAsState()
-        val shift by animateFloatAsState(if (pressed) 1f else 0f, spring(dampingRatio = 1f, stiffness = 800f), label = "press")
-        val alpha by animateFloatAsState(if (enabled) 1f else 0.35f, tween(200), label = "enabled")
-        Box(
-            modifier
-                .semantics { contentDescription = desc }
-                .graphicsLayer { translationY = shift * 2.dp.toPx(); this.alpha = alpha }
-                .clickable(source, indication = null, enabled = enabled, role = Role.Button, onClick = onClick)
-                .then(if (filled) Modifier.background(SIGNAL) else Modifier.border(1.5.dp, ink))
-                .padding(horizontal = 16.dp, vertical = 14.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(text, fontFamily = MONO, fontSize = 14.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp,
-                color = if (filled) Color.Black else ink)
-        }
-    }
-
-    @Composable
     fun CarResult(c: JSONObject) {
-        val ink = MaterialTheme.colorScheme.onBackground
         val confidence = c.optInt("confidence").coerceIn(0, 100)
         val swatch = runCatching { Color(android.graphics.Color.parseColor(c.optString("colour_hex"))) }.getOrNull()
 
-        Reveal(0) { Label("IDENTIFIED · " + c.optString("make").uppercase(), color = SIGNAL) }
+        Reveal(0) { Kicker(c.optString("make"), ACCENT) }
         Reveal(60) {
-            Text(c.optString("model"), fontSize = 44.sp, lineHeight = 44.sp, fontWeight = FontWeight.Black, letterSpacing = (-1.5).sp,
-                modifier = Modifier.padding(top = 4.dp, bottom = 14.dp))
+            Text(c.optString("model"), fontFamily = SERIF, fontWeight = FontWeight.Bold, fontSize = 42.sp, lineHeight = 46.sp,
+                modifier = Modifier.padding(top = 4.dp, bottom = 20.dp))
         }
-        Rule(ink, 2.dp)
-        SpecRow("MAKE", 120) { SpecValue(c.optString("make")) }
-        SpecRow("YEAR", 180) { SpecValue(c.optString("year_range")) }
-        SpecRow("COLOUR", 240) {
-            if (swatch != null) {
-                Box(Modifier.size(16.dp).background(swatch).border(1.dp, ink))
-                Spacer(Modifier.width(8.dp))
-            }
-            SpecValue(c.optString("colour").replaceFirstChar { it.uppercase() })
-        }
-        SpecRow("MATCH", 300) { SpecValue("$confidence%") }
-        Reveal(360) { BlockMeter(confidence / 100f, Modifier.padding(top = 12.dp)) }
-    }
-
-    /** One line of the spec table: mono label left, value right, hairline below. */
-    @Composable
-    fun SpecRow(label: String, delayMs: Int, value: @Composable RowScope.() -> Unit) {
-        Reveal(delayMs) {
-            Column {
-                Row(Modifier.fillMaxWidth().padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Label(label, Modifier.weight(1f))
-                    value()
+        Reveal(120) {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 20.dp)) {
+                Gauge(confidence / 100f, Modifier.size(width = 150.dp, height = 90.dp))
+                Spacer(Modifier.width(16.dp))
+                Column {
+                    Kicker("Match")
+                    Text(when {
+                        confidence >= 80 -> "Very likely"
+                        confidence >= 50 -> "Probably"
+                        else -> "Best guess"
+                    }, fontFamily = SERIF, fontSize = 22.sp)
                 }
-                Rule(MaterialTheme.colorScheme.outline, 1.dp)
             }
         }
+        Reveal(180) { Column { SpecRow("Make", c.optString("make")) } }
+        Reveal(240) { Column { SpecRow("Year", c.optString("year_range")) } }
+        Reveal(300) { Column { SpecRow("Colour", c.optString("colour").replaceFirstChar { it.uppercase() }, swatch) } }
     }
-
-    @Composable
-    fun SpecValue(text: String) =
-        Text(text, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
 }
